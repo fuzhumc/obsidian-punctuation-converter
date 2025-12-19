@@ -4,7 +4,6 @@ import {
   TFile,
   Editor,
   MarkdownView,
-  WorkspaceLeaf,
 } from 'obsidian';
 import {
   PunctuationConverterSettings,
@@ -13,7 +12,7 @@ import {
 } from './settings';
 
 export default class PunctuationConverter extends Plugin {
-  settings: PunctuationConverterSettings = DEFAULT_SETTINGS;
+  settings!: PunctuationConverterSettings;
   private editorWatchers = new Set<() => void>();
 
   async onload() {
@@ -146,36 +145,50 @@ export default class PunctuationConverter extends Plugin {
     }
   }
 
-async loadSettings() {
-  const data = await this.loadData();
+  async loadSettings() {
+    const raw = (await this.loadData()) as unknown;
 
-  this.settings = {
-    enabled: typeof data?.enabled === 'boolean' ? data.enabled : DEFAULT_SETTINGS.enabled,
-    
-    rules: Array.isArray(data?.rules)
-      ? this.validateRules(data.rules)
-      : [...DEFAULT_SETTINGS.rules],
-  };
-}
+    // 安全检查：raw 是否为有效设置对象
+    let enabled = DEFAULT_SETTINGS.enabled;
+    let rules = [...DEFAULT_SETTINGS.rules];
 
-// 辅助方法：校验并修复规则数组
-private validateRules(rules: unknown[]): PunctuationConverterSettings['rules'] {
-  if (!Array.isArray(rules)) return [...DEFAULT_SETTINGS.rules];
-
-  return rules
-    .map(rule => {
-      if (typeof rule !== 'object' || rule === null) {
-        return null;
+    if (typeof raw === 'object' && raw !== null) {
+      if ('enabled' in raw) {
+        const enabledVal = (raw as { enabled?: unknown }).enabled;
+        if (typeof enabledVal === 'boolean') {
+          enabled = enabledVal;
+        }
       }
-      const r = rule as Record<string, unknown>;
-      return {
-        enabled: typeof r.enabled === 'boolean' ? r.enabled : true,
-        from: typeof r.from === 'string' ? r.from : '',
-        to: typeof r.to === 'string' ? r.to : '',
-      };
-    })
-    .filter(rule => rule !== null && rule.from !== '' && rule.to !== '') as PunctuationConverterSettings['rules'];
-}
+
+      if ('rules' in raw) {
+        const rulesVal = (raw as { rules?: unknown }).rules;
+        if (Array.isArray(rulesVal)) {
+          rules = this.validateRules(rulesVal);
+        }
+      }
+    }
+
+    this.settings = { enabled, rules };
+  }
+
+  // 辅助方法：校验并修复规则数组
+  private validateRules(rules: unknown[]): PunctuationConverterSettings['rules'] {
+    if (!Array.isArray(rules)) return [...DEFAULT_SETTINGS.rules];
+
+    return rules
+      .map(rule => {
+        if (typeof rule !== 'object' || rule === null) {
+          return null;
+        }
+        const r = rule as Record<string, unknown>;
+        return {
+          enabled: typeof r.enabled === 'boolean' ? r.enabled : true,
+          from: typeof r.from === 'string' ? r.from : '',
+          to: typeof r.to === 'string' ? r.to : '',
+        };
+      })
+      .filter(rule => rule !== null && rule.from !== '' && rule.to !== '') as PunctuationConverterSettings['rules'];
+  }
 
   async saveSettings() {
     await this.saveData(this.settings);
