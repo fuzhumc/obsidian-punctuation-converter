@@ -1,7 +1,7 @@
 {
-	"name": "obsidian-sample-plugin",
+	"name": "punctuation-converter",
 	"version": "1.0.0",
-	"description": "This is a sample plugin for Obsidian (https://obsidian.md)",
+	"description": "自动将中文标点转化为对应的英文标点.",
 	"main": "main.js",
 	"type": "module",
 	"scripts": {

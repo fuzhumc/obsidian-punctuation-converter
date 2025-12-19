@@ -1,99 +1,166 @@
-import {App, Editor, MarkdownView, Modal, Notice, Plugin} from 'obsidian';
-import {DEFAULT_SETTINGS, MyPluginSettings, SampleSettingTab} from "./settings";
+import {
+  Plugin,
+  Notice,
+  TFile,
+  Editor,
+  MarkdownView,
+  WorkspaceLeaf,
+} from 'obsidian';
+import {
+  PunctuationConverterSettings,
+  DEFAULT_SETTINGS,
+  PunctuationConverterSettingTab,
+} from './settings';
 
-// Remember to rename these classes and interfaces!
+export default class PunctuationConverter extends Plugin {
+  settings!: PunctuationConverterSettings;
+  private editorWatchers = new Set<() => void>();
 
-export default class MyPlugin extends Plugin {
-	settings: MyPluginSettings;
+  async onload() {
+    await this.loadSettings();
 
-	async onload() {
-		await this.loadSettings();
+    // 注册设置
+    this.addSettingTab(new PunctuationConverterSettingTab(this.app, this));
 
-		// This creates an icon in the left ribbon.
-		this.addRibbonIcon('dice', 'Sample', (evt: MouseEvent) => {
-			// Called when the user clicks the icon.
-			new Notice('This is a notice!');
-		});
+    // 命令：切换启用状态
+    this.addCommand({
+      id: 'toggle-punctuation-conversion',
+      name: '切换中文标点转换',
+      callback: async () => {
+        this.settings.enabled = !this.settings.enabled;
+        await this.saveSettings();
+        new Notice(
+          this.settings.enabled
+            ? '标点自动转换已启用'
+            : '标点自动转换已禁用'
+        );
+      },
+    });
 
-		// This adds a status bar item to the bottom of the app. Does not work on mobile apps.
-		const statusBarItemEl = this.addStatusBarItem();
-		statusBarItemEl.setText('Status bar text');
+    // 命令：转换当前文档
+    this.addCommand({
+      id: 'convert-current-file-punctuation',
+      name: '一键转换当前文档标点',
+      callback: async () => {
+        const file = this.app.workspace.getActiveFile();
+        if (!file) {
+          new Notice('未打开任何文档');
+          return;
+        }
+        await this.convertEntireFile(file);
+        new Notice('标点转换完成');
+      },
+    });
 
-		// This adds a simple command that can be triggered anywhere
-		this.addCommand({
-			id: 'open-modal-simple',
-			name: 'Open modal (simple)',
-			callback: () => {
-				new SampleModal(this.app).open();
-			}
-		});
-		// This adds an editor command that can perform some operation on the current editor instance
-		this.addCommand({
-			id: 'replace-selected',
-			name: 'Replace selected content',
-			editorCallback: (editor: Editor, view: MarkdownView) => {
-				editor.replaceSelection('Sample editor command');
-			}
-		});
-		// This adds a complex command that can check whether the current state of the app allows execution of the command
-		this.addCommand({
-			id: 'open-modal-complex',
-			name: 'Open modal (complex)',
-			checkCallback: (checking: boolean) => {
-				// Conditions to check
-				const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (markdownView) {
-					// If checking is true, we're simply "checking" if the command can be run.
-					// If checking is false, then we want to actually perform the operation.
-					if (!checking) {
-						new SampleModal(this.app).open();
-					}
+    // 监听所有 Markdown 视图
+    this.registerEvent(
+      this.app.workspace.on('active-leaf-change', (leaf) => {
+        if (leaf?.view instanceof MarkdownView) {
+          this.attachEditorListener(leaf.view.editor);
+        }
+      })
+    );
 
-					// This command will only show up in Command Palette when the check function returns true
-					return true;
-				}
-				return false;
-			}
-		});
+    // 初始化当前编辑器
+    const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (activeView) {
+      this.attachEditorListener(activeView.editor);
+    }
+  }
 
-		// This adds a settings tab so the user can configure various aspects of the plugin
-		this.addSettingTab(new SampleSettingTab(this.app, this));
+  attachEditorListener(editor: Editor) {
+    // 清理旧的监听器（防止重复绑定）
+    this.editorWatchers.forEach(dispose => dispose());
+    this.editorWatchers.clear();
 
-		// If the plugin hooks up any global DOM events (on parts of the app that doesn't belong to this plugin)
-		// Using this function will automatically remove the event listener when this plugin is disabled.
-		this.registerDomEvent(document, 'click', (evt: MouseEvent) => {
-			new Notice("Click");
-		});
+    if (!editor) return;
 
-		// When registering intervals, this function will automatically clear the interval when the plugin is disabled.
-		this.registerInterval(window.setInterval(() => console.log('setInterval'), 5 * 60 * 1000));
+    const transformText = (newText: string, oldText: string): string => {
+      if (!this.settings.enabled) return newText;
 
-	}
+      let result = newText;
+      let changed = false;
+      for (const rule of this.settings.rules) {
+        if (rule.enabled && result.includes(rule.from)) {
+          result = result.replaceAll(rule.from, rule.to);
+          changed = true;
+        }
+      }
+      return changed ? result : newText;
+    };
 
-	onunload() {
-	}
+    const dispose = this.watchEditorChanges(editor, transformText);
+    this.editorWatchers.add(dispose);
+  }
 
-	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData() as Partial<MyPluginSettings>);
-	}
+  private watchEditorChanges(
+    editor: Editor,
+    transformer: (newText: string, oldText: string) => string
+  ): () => void {
+    let lastValue = editor.getValue();
+    let isProcessing = false;
 
-	async saveSettings() {
-		await this.saveData(this.settings);
-	}
-}
+    const checkAndUpdate = () => {
+      const currentValue = editor.getValue();
+      if (currentValue === lastValue || isProcessing) return;
 
-class SampleModal extends Modal {
-	constructor(app: App) {
-		super(app);
-	}
+      isProcessing = true;
+      setTimeout(() => {
+        try {
+          const modified = transformer(currentValue, lastValue);
+          if (modified !== currentValue) {
+            const cursor = editor.getCursor();
+            editor.setValue(modified);
+            // 尽力恢复光标（简单策略）
+            editor.setCursor(cursor);
+          }
+        } finally {
+          lastValue = editor.getValue();
+          isProcessing = false;
+        }
+      }, 0);
+    };
 
-	onOpen() {
-		let {contentEl} = this;
-		contentEl.setText('Woah!');
-	}
+    const intervalId = window.setInterval(checkAndUpdate, 150);
+    return () => window.clearInterval(intervalId);
+  }
 
-	onClose() {
-		const {contentEl} = this;
-		contentEl.empty();
-	}
+
+  async convertEntireFile(file: TFile) {
+    try {
+      const content = await this.app.vault.read(file);
+      let newContent = content;
+
+      for (const rule of this.settings.rules) {
+        if (rule.enabled && newContent.includes(rule.from)) {
+          newContent = newContent.replaceAll(rule.from, rule.to);
+        }
+      }
+
+      if (newContent !== content) {
+        await this.app.vault.modify(file, newContent);
+      }
+    } catch (e) {
+      console.error('转换文件失败', e);
+      throw e;
+    }
+  }
+
+  async loadSettings() {
+    this.settings = Object.assign(
+      {},
+      DEFAULT_SETTINGS,
+      await this.loadData()
+    );
+  }
+
+  async saveSettings() {
+    await this.saveData(this.settings);
+  }
+
+  onunload() {
+    // 清理所有编辑器监听器
+    this.editorWatchers.forEach(dispose => dispose());
+    this.editorWatchers.clear();
+  }
 }
