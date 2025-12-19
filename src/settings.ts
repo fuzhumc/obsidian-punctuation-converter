@@ -68,7 +68,7 @@ export class PunctuationConverterSettingTab extends PluginSettingTab {
           })
       );
 
-    containerEl.createEl('h4', { text: '转换规则' });
+    new Setting(containerEl).setHeading().setName('转换规则');
     // 动态生成规则开关
     for (const rule of this.plugin.settings.rules) {
       new Setting(containerEl)

@@ -13,7 +13,7 @@ import {
 } from './settings';
 
 export default class PunctuationConverter extends Plugin {
-  settings!: PunctuationConverterSettings;
+  settings: PunctuationConverterSettings = DEFAULT_SETTINGS;
   private editorWatchers = new Set<() => void>();
 
   async onload() {
@@ -146,13 +146,36 @@ export default class PunctuationConverter extends Plugin {
     }
   }
 
-  async loadSettings() {
-    this.settings = Object.assign(
-      {},
-      DEFAULT_SETTINGS,
-      await this.loadData()
-    );
-  }
+async loadSettings() {
+  const data = await this.loadData();
+
+  this.settings = {
+    enabled: typeof data?.enabled === 'boolean' ? data.enabled : DEFAULT_SETTINGS.enabled,
+    
+    rules: Array.isArray(data?.rules)
+      ? this.validateRules(data.rules)
+      : [...DEFAULT_SETTINGS.rules],
+  };
+}
+
+// 辅助方法：校验并修复规则数组
+private validateRules(rules: unknown[]): PunctuationConverterSettings['rules'] {
+  if (!Array.isArray(rules)) return [...DEFAULT_SETTINGS.rules];
+
+  return rules
+    .map(rule => {
+      if (typeof rule !== 'object' || rule === null) {
+        return null;
+      }
+      const r = rule as Record<string, unknown>;
+      return {
+        enabled: typeof r.enabled === 'boolean' ? r.enabled : true,
+        from: typeof r.from === 'string' ? r.from : '',
+        to: typeof r.to === 'string' ? r.to : '',
+      };
+    })
+    .filter(rule => rule !== null && rule.from !== '' && rule.to !== '') as PunctuationConverterSettings['rules'];
+}
 
   async saveSettings() {
     await this.saveData(this.settings);
