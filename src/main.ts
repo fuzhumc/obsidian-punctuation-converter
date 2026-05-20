@@ -18,6 +18,17 @@ export default class PunctuationConverter extends Plugin {
   async onload() {
     await this.loadSettings();
 
+    // 侧边栏按钮
+    this.addRibbonIcon('replace-all', '转换标点', async () => {
+      const file = this.app.workspace.getActiveFile();
+      if (!file) {
+        new Notice('未打开任何文档');
+        return;
+      }
+      await this.convertEntireFile(file);
+      new Notice('标点转换完成');
+    });
+
     // 注册设置
     this.addSettingTab(new PunctuationConverterSettingTab(this.app, this));
 
@@ -51,6 +62,31 @@ export default class PunctuationConverter extends Plugin {
       },
     });
 
+    // 右键菜单：转换选中文本
+    this.registerEvent(
+      this.app.workspace.on('editor-menu', (menu, editor) => {
+        if (!editor.somethingSelected()) return;
+
+        menu.addItem((item) => {
+          item
+            .setTitle('转换选中标点')
+            .setIcon('replace-all')
+            .onClick(() => {
+              const selection = editor.getSelection();
+              let result = selection;
+              for (const rule of this.settings.rules) {
+                if (rule.enabled) {
+                  result = result.replaceAll(rule.from, rule.to);
+                }
+              }
+              if (result !== selection) {
+                editor.replaceSelection(result);
+              }
+            });
+        });
+      })
+    );
+
     // 监听所有 Markdown 视图
     this.registerEvent(
       this.app.workspace.on('active-leaf-change', (leaf) => {
@@ -74,18 +110,16 @@ export default class PunctuationConverter extends Plugin {
 
     if (!editor) return;
 
-    const transformText = (newText: string, oldText: string): string => {
-      if (!this.settings.enabled) return newText;
+    const transformText = (text: string): string => {
+      if (!this.settings.enabled) return text;
 
-      let result = newText;
-      let changed = false;
+      let result = text;
       for (const rule of this.settings.rules) {
-        if (rule.enabled && result.includes(rule.from)) {
+        if (rule.enabled) {
           result = result.replaceAll(rule.from, rule.to);
-          changed = true;
         }
       }
-      return changed ? result : newText;
+      return result !== text ? result : text;
     };
 
     const dispose = this.watchEditorChanges(editor, transformText);
@@ -94,30 +128,64 @@ export default class PunctuationConverter extends Plugin {
 
   private watchEditorChanges(
     editor: Editor,
-    transformer: (newText: string, oldText: string) => string
+    transformer: (text: string) => string
   ): () => void {
     let lastValue = editor.getValue();
-    let isProcessing = false;
+
+    const offsetToPos = (text: string, offset: number) => {
+      let line = 0;
+      let ch = 0;
+      for (let i = 0; i < offset && i < text.length; i++) {
+        if (text[i] === '\n') {
+          line++;
+          ch = 0;
+        } else {
+          ch++;
+        }
+      }
+      return { line, ch };
+    };
 
     const checkAndUpdate = () => {
       const currentValue = editor.getValue();
-      if (currentValue === lastValue || isProcessing) return;
+      if (currentValue === lastValue) return;
 
-      isProcessing = true;
-      setTimeout(() => {
-        try {
-          const modified = transformer(currentValue, lastValue);
-          if (modified !== currentValue) {
-            const cursor = editor.getCursor();
-            editor.setValue(modified);
-            // 尽力恢复光标（简单策略）
-            editor.setCursor(cursor);
-          }
-        } finally {
-          lastValue = editor.getValue();
-          isProcessing = false;
-        }
-      }, 0);
+      // 从两端 diff，找到变更区域
+      let prefixLen = 0;
+      const minLen = Math.min(lastValue.length, currentValue.length);
+      while (prefixLen < minLen && lastValue[prefixLen] === currentValue[prefixLen]) {
+        prefixLen++;
+      }
+
+      let oldSuffixLen = 0;
+      let newSuffixLen = 0;
+      const maxSuffix = Math.min(
+        lastValue.length - prefixLen,
+        currentValue.length - prefixLen
+      );
+      while (
+        oldSuffixLen < maxSuffix &&
+        lastValue[lastValue.length - 1 - oldSuffixLen] ===
+          currentValue[currentValue.length - 1 - newSuffixLen]
+      ) {
+        oldSuffixLen++;
+        newSuffixLen++;
+      }
+
+      const newEnd = currentValue.length - newSuffixLen;
+      const insertedText = currentValue.slice(prefixLen, newEnd);
+      const transformed = transformer(insertedText);
+
+      if (transformed !== insertedText) {
+        editor.replaceRange(
+          transformed,
+          offsetToPos(currentValue, prefixLen),
+          offsetToPos(currentValue, newEnd)
+        );
+        lastValue = editor.getValue();
+      } else {
+        lastValue = currentValue;
+      }
     };
 
     const intervalId = window.setInterval(checkAndUpdate, 150);
@@ -126,22 +194,17 @@ export default class PunctuationConverter extends Plugin {
 
 
   async convertEntireFile(file: TFile) {
-    try {
-      const content = await this.app.vault.read(file);
-      let newContent = content;
+    const content = await this.app.vault.read(file);
+    let newContent = content;
 
-      for (const rule of this.settings.rules) {
-        if (rule.enabled && newContent.includes(rule.from)) {
-          newContent = newContent.replaceAll(rule.from, rule.to);
-        }
+    for (const rule of this.settings.rules) {
+      if (rule.enabled) {
+        newContent = newContent.replaceAll(rule.from, rule.to);
       }
+    }
 
-      if (newContent !== content) {
-        await this.app.vault.modify(file, newContent);
-      }
-    } catch (e) {
-      console.error('转换文件失败', e);
-      throw e;
+    if (newContent !== content) {
+      await this.app.vault.modify(file, newContent);
     }
   }
 
