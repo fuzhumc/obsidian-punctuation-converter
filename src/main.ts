@@ -30,15 +30,17 @@ export default class PunctuationConverter extends Plugin {
     this.statusBarItem = this.addStatusBarItem();
     this.updateStatusBar();
     this.statusBarItem.addClass('mod-clickable');
-    this.statusBarItem.addEventListener('click', async () => {
-      this.settings.enabled = !this.settings.enabled;
-      await this.saveSettings();
-      this.updateStatusBar();
-      new Notice(
-        this.settings.enabled
-          ? t.conversionEnabled
-          : t.conversionDisabled
-      );
+    this.statusBarItem.addEventListener('click', () => {
+      void (async () => {
+        this.settings.enabled = !this.settings.enabled;
+        await this.saveSettings();
+        this.updateStatusBar();
+        new Notice(
+          this.settings.enabled
+            ? t.conversionEnabled
+            : t.conversionDisabled
+        );
+      })();
     });
 
     this.addRibbonIcon('replace-all', t.ribbonTooltip, async () => {
